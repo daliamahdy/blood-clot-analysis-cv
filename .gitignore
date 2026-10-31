@@ -1,0 +1,30 @@
+# Local Python environments and caches
+**/.venv/
+**/.clotenv/
+**/__pycache__/
+*.py[cod]
+
+# Input images/videos and derived project data
+**/input/
+**/results/
+**/output/
+**/checkpoints/
+*.csv
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.tif
+*.tiff
+*.gif
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.mpeg
+*.mpg
+
+# Local editor and OS files
+.vscode/
+.DS_Store
+Thumbs.db
