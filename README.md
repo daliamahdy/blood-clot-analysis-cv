@@ -8,6 +8,33 @@ The project uses **classical computer vision techniques with OpenCV and NumPy**,
 
 The project explores traditional image-processing methods for biological image analysis, combining colour-channel analysis, thresholding, morphological refinement, contour detection, and temporal information.
 
+## Pipeline Overview
+
+```mermaid
+flowchart TD
+    A[Input Images / Video] --> B[Frame Extraction]
+    B --> C[Image Preprocessing]
+
+    C --> D1[Blood Clot Analysis]
+    C --> D2[Robot-Head Detection]
+
+    D1 --> E1[Red Channel Extraction]
+    E1 --> F1[Thresholding]
+    F1 --> G1[Morphological Refinement]
+    G1 --> H1[Region Selection & Recovery]
+    H1 --> I1[Temporal Refinement]
+    I1 --> J1[Clot Segmentation Mask]
+
+    D2 --> E2[Right-Side ROI Selection]
+    E2 --> F2[Grayscale & Thresholding]
+    F2 --> G2[Contour Detection]
+    G2 --> H2[Shape-Based Filtering]
+    H2 --> I2[Robot-Head Localization]
+
+    J1 --> K[Visualization & Results]
+    I2 --> K
+```
+
 ## Features
 
 ### 1. Blood Clot Segmentation
