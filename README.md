@@ -1,4 +1,3 @@
-# blood-clot-analysis-cv
 # Blood Clot Analysis using Computer Vision
 
 A Python-based computer vision project for automated blood clot segmentation, area analysis, and robot-head detection in image and video data.
