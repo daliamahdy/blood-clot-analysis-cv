@@ -1,4 +1,5 @@
 # Blood Clot Analysis using Computer Vision
+![Blood Clot Analysis Demo](docs/demo_output.png)
 
 A Python-based computer vision project for automated blood clot segmentation, area analysis, and robot-head detection in image and video data.
 
@@ -39,11 +40,9 @@ flowchart TD
 
 ### 1. Blood Clot Segmentation
 - Red-channel-based image analysis.
-- Gaussian smoothing and thresholding.
+- Gaussian smoothing and threshold.
 - Morphological operations to refine segmentation.
 - Connected-component analysis to identify the clot region.
-- Recovery of missing regions using relaxed thresholds.
-- Temporal consistency to reduce segmentation variations between video frames.
 
 ### 2. Clot Visualization
 - Semi-transparent overlay of the detected clot.
