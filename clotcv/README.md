@@ -71,5 +71,5 @@ Optional environment variables:
 Tuned for one imaging setup. Adjust at the top of `ground.py` or in the function arguments:
 
 - `TUBE_Y_TOP_RATIO`, `TUBE_Y_BOTTOM_RATIO` – vertical limits of the tube interior
-- `gamma`, `threshold`, `ksize` in `segment_clot` – clot segmentation
+- `gamma`, `threshold`, and `CLOT_CLOSE_KERNEL` in `ground.py` – clot segmentation
 - `thresh`, `core_frac`, `min_area` in `find_head` – head detection

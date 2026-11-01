@@ -1,366 +1,582 @@
 import argparse
-import os
 import cv2
 import numpy as np
 from pathlib import Path
+import re
+
 
 # ============================================================
-# Blood clot segmentation and robot-head localization
-#
-# Blood clot: red-channel segmentation
-# Head: dark-spot detection and centered box
-#
-# Every analysis step is saved as a numbered image in clotcv/results/visualizations/steps/
+# CONFIGURATION
 # ============================================================
 
-PROJECT_DIR = Path(__file__).resolve().parent
-INPUT_PATH = Path(
-    os.environ.get("IN", PROJECT_DIR / "input" / "images" / "Set1")
-)
-OUTPUT_DIR = Path(os.environ.get("OUT", Path(__file__).resolve().parent / "results"))
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+INPUT_DIR = Path("input/images/Set1")
+OUTPUT_DIR = Path("results")
 
-# vertical limits of the tube INTERIOR (fractions of image height)
-TUBE_Y_TOP_RATIO = 0.26
-TUBE_Y_BOTTOM_RATIO = 0.66
+# Clot segmentation
+BLUR_SIZE = 5
+THRESHOLD = 100
+MORPH_SIZE = 5
 
-CLOT_ALPHA = 0.50
-CLOT_COLOR = (140, 55, 15)       # BGR dark blue
-HEAD_BOX_COLOR = (45, 125, 30)   # BGR dark green
-HEAD_BOX_ALPHA = 0.50            # same opacity as the clot
-HEAD_BOX_PAD = 4                 # small padding around the head core, in pixels
-HEAD_CLOT_MARGIN_KERNEL = 61
-HEAD_MIN_CANDIDATE_HEIGHT = 16
-HEAD_MAX_CANDIDATE_ASPECT = 2.0
+RECOVERY_THRESHOLD = 125
+RECOVERY_RADIUS = 12
 
+# Temporal stabilisation
+TEMPORAL_RADIUS = 3
+TEMPORAL_KEEP_THRESHOLD = 145
 
-# ---------------- step recorder ----------------
-class StepSaver:
-    #Saves one numbered image after every analysis step.
+# Clot overlay (BGR)
+OVERLAY_ALPHA = 0.50
+OVERLAY_COLOR = (140, 55, 15)
 
-    def __init__(self, folder):
-        self.folder = Path(folder)
-        self.folder.mkdir(parents=True, exist_ok=True)
-        for old in self.folder.glob("*.png"):      # start clean on every run
-            old.unlink()
-        self.count = 0
+# Robot detection: rightmost third only
+ROBOT_DARK_THRESHOLD = 65
+ROBOT_MIN_AREA = 10
+ROBOT_MIN_CIRCULARITY = 0.35
+ROBOT_MIN_ASPECT_RATIO = 0.65
 
-    def save(self, name, image):
-        img = np.asarray(image)
-        if img.dtype != np.uint8:                  # float images -> 0..255 for viewing
-            img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        self.count += 1
-        path = self.folder / f"{self.count:02d}_{name}.png"
-        if not cv2.imwrite(str(path), img):
-            raise OSError(f"Could not save pipeline step: {path}")
-        return image
+ROBOT_BOX_SCALE = 2.5
+ROBOT_BOX_MIN_SIZE = 30
+ROBOT_BOX_MAX_SIZE = 100
+
+ROBOT_OVERLAY_ALPHA = 0.35
+ROBOT_COLOR = (0, 255, 0)
 
 
-# ---------------- blood clot ----------------
-def gamma_correct(image, gamma=2.0):
-    lut = np.array([((i / 255.0) ** gamma) * 255 for i in range(256)], dtype=np.uint8)
-    return cv2.LUT(image, lut)
+# ============================================================
+# GENERAL HELPERS
+# ============================================================
+
+def natural_sort_key(path):
+    return [
+        int(part) if part.isdigit() else part.lower()
+        for part in re.split(r"(\d+)", path.name)
+    ]
 
 
-def threshold_clot(channel, threshold=40, blur=7, steps=None):
-    smooth = cv2.GaussianBlur(channel, (blur, blur), 0)
-    if steps:
-        steps.save("clot_blurred", smooth)
-    _, mask = cv2.threshold(smooth, threshold, 255, cv2.THRESH_BINARY_INV)
-    return mask
+def largest_component(mask):
+    binary = (mask > 0).astype(np.uint8)
 
-
-def close_and_fill(mask, ksize=25, steps=None):
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
-    closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-    if steps:
-        steps.save("clot_closed", closed)
-
-    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        if steps:
-            steps.save("clot_no_contours_found", closed)
-        return closed
-
-    largest = max(contours, key=cv2.contourArea)
-    if steps:
-        contour_image = cv2.cvtColor(closed, cv2.COLOR_GRAY2BGR)
-        cv2.drawContours(contour_image, contours, -1, (0, 255, 255), 1)
-        steps.save("clot_all_contours", contour_image)
-
-    filled = np.zeros_like(mask)
-    cv2.drawContours(filled, [largest], -1, 255, thickness=cv2.FILLED)
-    if steps:
-        largest_contour = np.zeros_like(mask)
-        cv2.drawContours(largest_contour, [largest], -1, 255, thickness=1)
-        steps.save("clot_largest_contour", largest_contour)
-        steps.save("clot_filled", filled)
-    return filled
-
-
-def segment_clot(image, gamma=2.0, threshold=40, ksize=25, steps=None):
-    red = image[:, :, 2]                      # OpenCV is BGR
-    if steps:
-        steps.save("clot_red_channel", red)
-
-    red_gamma = gamma_correct(red, gamma)
-    if steps:
-        steps.save("clot_red_gamma", red_gamma)
-
-    mask = threshold_clot(red_gamma, threshold, steps=steps)
-    if steps:
-        steps.save("clot_threshold", mask)
-
-    clot_mask = close_and_fill(mask, ksize, steps=steps)
-    if steps:
-        steps.save("clot_mask_final", clot_mask)
-    return clot_mask
-
-
-def make_head_exclusion_mask(clot_mask):
-    margin = cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE,
-        (HEAD_CLOT_MARGIN_KERNEL, HEAD_CLOT_MARGIN_KERNEL),
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        binary, connectivity=8
     )
-    return cv2.dilate(clot_mask, margin)
+
+    if count <= 1:
+        return np.zeros_like(binary)
+
+    largest_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
+
+    result = np.zeros_like(binary)
+    result[labels == largest_label] = 255
+
+    return result
 
 
-# ---------------- helical robot head ----------------
-def find_head(
-    image,
-    clot_mask,
-    y_band,
-    ksize=61,
-    thresh=20,
-    min_area=150,
-    core_frac=0.5,
-    steps=None,
-):
+def save_debug(path, image):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(path), image)
 
-    # Robot head = small dark blob (black-hat on red), away from the clot.
-    # Returns a tight box (x, y, w, h) CENTERED on the head:
-    #  - core_frac keeps only the darkest part of the blob (higher = tighter box)
-    #  - the box is centered on the intensity-weighted center of that core
 
-    red = cv2.GaussianBlur(image[:, :, 2], (9, 9), 0)
-    if steps:
-        steps.save("head_red_blurred", red)
+# ============================================================
+# CLOT SEGMENTATION
+# ============================================================
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
-    blackhat = cv2.morphologyEx(red, cv2.MORPH_BLACKHAT, kernel).astype(np.float32)
-    if steps:
-        steps.save("head_blackhat", blackhat)
+def segment_clot(image, previous_mask=None):
 
-    _, mask = cv2.threshold(blackhat.astype(np.uint8), thresh, 255, cv2.THRESH_BINARY)
-    if steps:
-        steps.save("head_threshold", mask)
+    red = image[:, :, 2]
 
-    # ignore the clot and a margin around it, and everything outside the tube
-    expanded_clot = make_head_exclusion_mask(clot_mask)
-    if steps:
-        steps.save("head_exclusion_margin_around_clot", expanded_clot)
-    mask[expanded_clot > 0] = 0
-    if steps:
-        steps.save("head_clot_removed", mask)
-    mask[:y_band[0]] = 0
-    mask[y_band[1]:] = 0
-    if steps:
-        tube_band = np.zeros_like(mask)
-        tube_band[y_band[0]:y_band[1]] = 255
-        steps.save("head_tube_search_band", tube_band)
-        steps.save("head_inside_tube_band", mask)
+    blurred = cv2.GaussianBlur(
+        red,
+        (BLUR_SIZE, BLUR_SIZE),
+        0
+    )
 
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    contours = [c for c in contours if cv2.contourArea(c) >= min_area]
-    if steps:
-        area_filtered = np.zeros_like(mask)
-        cv2.drawContours(area_filtered, contours, -1, 255, cv2.FILLED)
-        steps.save("head_area_filtered_candidates", area_filtered)
-        steps.save("head_clot_and_outside_removed", mask)
-    if not contours:
-        empty_mask = np.zeros_like(mask)
-        if steps:
-            steps.save("head_no_candidate", empty_mask)
-        return None, empty_mask, False
+    # Initial dark clot candidates
+    _, core = cv2.threshold(
+        blurred,
+        THRESHOLD,
+        255,
+        cv2.THRESH_BINARY_INV
+    )
 
-    plausible = []
-    for contour in contours:
-        _, _, w, h = cv2.boundingRect(contour)
-        aspect = w / h if h else float("inf")
-        if h >= HEAD_MIN_CANDIDATE_HEIGHT and aspect <= HEAD_MAX_CANDIDATE_ASPECT:
-            plausible.append(contour)
-    if not plausible:
-        empty_mask = np.zeros_like(mask)
-        if steps:
-            steps.save("head_no_plausible_candidate", empty_mask)
-        return None, empty_mask, False
-    blob = max(plausible, key=cv2.contourArea)
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (MORPH_SIZE, MORPH_SIZE)
+    )
 
-    x, y, w, h = cv2.boundingRect(blob)
-    head_mask = np.zeros_like(mask)
-    cv2.drawContours(head_mask, [blob], -1, 255, cv2.FILLED)
+    core = cv2.morphologyEx(
+        core,
+        cv2.MORPH_OPEN,
+        kernel
+    )
 
-    if steps:
-        steps.save("head_blob", head_mask)
+    core = cv2.morphologyEx(
+        core,
+        cv2.MORPH_CLOSE,
+        kernel
+    )
 
-    # darkest core of the blob
-    roi = blackhat[y:y + h, x:x + w]
-    core = (roi > core_frac * roi.max()).astype(np.uint8)
-    if steps:
-        core_threshold = np.zeros_like(mask)
-        core_threshold[y:y + h, x:x + w] = core * 255
-        steps.save("head_core_threshold", core_threshold)
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(core)
-    if n < 2:
-        box = (x, y, w, h)
-    else:
-        best = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-        ys, xs = np.where(labels == best)
-        weights = roi[ys, xs]
+    core = largest_component(core)
 
-        if steps:
-            core_mask = np.zeros_like(mask)
-            core_mask[y + ys, x + xs] = 255
-            steps.save("head_core", core_mask)
+    # Relaxed candidates
+    _, relaxed_candidates = cv2.threshold(
+        blurred,
+        RECOVERY_THRESHOLD,
+        255,
+        cv2.THRESH_BINARY_INV
+    )
 
-        cx = (xs * weights).sum() / weights.sum() + x
-        cy = (ys * weights).sum() / weights.sum() + y
-        half_w = max(abs(xs.min() + x - cx), abs(xs.max() + x - cx))
-        half_h = max(abs(ys.min() + y - cy), abs(ys.max() + y - cy))
-        bw = int(round(2 * half_w)) + 1
-        bh = int(round(2 * half_h)) + 1
-        box = (int(round(cx - half_w)), int(round(cy - half_h)), bw, bh)
+    recovery_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (2 * RECOVERY_RADIUS + 1, 2 * RECOVERY_RADIUS + 1)
+    )
 
-    if steps:
-        steps.save("robot_head_mask", head_mask)
-        center_image = image.copy()
-        cv2.rectangle(
-            center_image,
-            (box[0], box[1]),
-            (box[0] + box[2], box[1] + box[3]),
-            (0, 255, 0),
-            2,
+    expanded_core = cv2.dilate(
+        core,
+        recovery_kernel,
+        iterations=1
+    )
+
+    relaxed_candidates = cv2.bitwise_and(
+        relaxed_candidates,
+        expanded_core
+    )
+
+    # Recover clot pixels on the left side
+    ys, xs = np.where(core > 0)
+
+    if len(xs) > 0:
+
+        center_x = int(np.mean(xs))
+
+        left_region = np.zeros_like(core)
+        left_region[:, :center_x + 1] = 255
+
+        recovery = cv2.bitwise_and(
+            relaxed_candidates,
+            left_region
         )
-        steps.save("head_center_and_box", center_image)
-    return box, head_mask, True
+
+        clot_mask = cv2.bitwise_or(
+            core,
+            recovery
+        )
+
+    else:
+        clot_mask = core.copy()
+
+    clot_mask = cv2.morphologyEx(
+        clot_mask,
+        cv2.MORPH_CLOSE,
+        kernel
+    )
+
+    clot_mask = largest_component(clot_mask)
+
+    # Temporal stabilisation
+    if previous_mask is not None:
+
+        temporal_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (
+                2 * TEMPORAL_RADIUS + 1,
+                2 * TEMPORAL_RADIUS + 1
+            )
+        )
+
+        previous_nearby = cv2.dilate(
+            previous_mask,
+            temporal_kernel,
+            iterations=1
+        )
+
+        plausible_previous = np.zeros_like(previous_mask)
+
+        plausible_previous[
+            blurred < TEMPORAL_KEEP_THRESHOLD
+        ] = 255
+
+        retained = cv2.bitwise_and(
+            previous_nearby,
+            plausible_previous
+        )
+
+        clot_mask = cv2.bitwise_or(
+            clot_mask,
+            retained
+        )
+
+        clot_mask = largest_component(clot_mask)
+
+    return clot_mask, core, relaxed_candidates
 
 
-# ---------------- visualization ----------------
-def make_overlay(image, mask, color=CLOT_COLOR, alpha=CLOT_ALPHA):
+# ============================================================
+# ROBOT HEAD DETECTION
+# ============================================================
+
+def detect_robot_head(image, steps_dir):
+
+    height, width = image.shape[:2]
+
+    # Search ONLY the rightmost third
+    start_x = (width * 2) // 3
+
+    roi = image[:, start_x:]
+
+    gray = cv2.cvtColor(
+        roi,
+        cv2.COLOR_BGR2GRAY
+    )
+
+    blurred = cv2.GaussianBlur(
+        gray,
+        (5, 5),
+        0
+    )
+
+    # Detect dark regions
+    _, dark_mask = cv2.threshold(
+        blurred,
+        ROBOT_DARK_THRESHOLD,
+        255,
+        cv2.THRESH_BINARY_INV
+    )
+
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (3, 3)
+    )
+
+    dark_mask = cv2.morphologyEx(
+        dark_mask,
+        cv2.MORPH_OPEN,
+        kernel
+    )
+
+    # Find contours
+    contours, _ = cv2.findContours(
+        dark_mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    diagnostic = cv2.cvtColor(
+        dark_mask,
+        cv2.COLOR_GRAY2BGR
+    )
+
+    candidates = []
+
+    for contour in contours:
+
+        area = cv2.contourArea(contour)
+
+        if area < ROBOT_MIN_AREA:
+            continue
+
+        x, y, w, h = cv2.boundingRect(contour)
+
+        if w == 0 or h == 0:
+            continue
+
+        perimeter = cv2.arcLength(
+            contour,
+            True
+        )
+
+        if perimeter == 0:
+            continue
+
+        circularity = (
+            4.0 * np.pi * area /
+            (perimeter * perimeter)
+        )
+
+        aspect_ratio = min(w, h) / max(w, h)
+
+        if circularity < ROBOT_MIN_CIRCULARITY:
+            continue
+
+        if aspect_ratio < ROBOT_MIN_ASPECT_RATIO:
+            continue
+
+        global_x = x + start_x
+
+        candidates.append({
+            "x": global_x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "area": area,
+            "cx": global_x + w // 2,
+            "cy": y + h // 2,
+            "circularity": circularity
+        })
+
+    # Diagnostic image: all valid candidates
+    for candidate in candidates:
+
+        x = candidate["x"] - start_x
+        y = candidate["y"]
+        w = candidate["w"]
+        h = candidate["h"]
+
+        cv2.rectangle(
+            diagnostic,
+            (x, y),
+            (x + w, y + h),
+            (0, 0, 255),
+            2
+        )
+
+    save_debug(
+        steps_dir / "11_robot_candidates.png",
+        diagnostic
+    )
+
+    if not candidates:
+        print("Robot head not detected in the rightmost third.")
+        return None
+
+    # Select the largest circular dark object
+    selected = max(
+        candidates,
+        key=lambda c: c["area"] * c["circularity"]
+    )
+
+    cx = selected["cx"]
+    cy = selected["cy"]
+
+    # Create square around the detected circle
+    box_size = int(
+        max(selected["w"], selected["h"]) *
+        ROBOT_BOX_SCALE
+    )
+
+    box_size = max(
+        ROBOT_BOX_MIN_SIZE,
+        min(box_size, ROBOT_BOX_MAX_SIZE)
+    )
+
+    half = box_size // 2
+
+    x1 = max(0, cx - half)
+    y1 = max(0, cy - half)
+
+    x2 = min(width - 1, cx + half)
+    y2 = min(height - 1, cy + half)
+
+    print(
+        f"Robot head detected: centre=({cx}, {cy}), "
+        f"area={selected['area']:.0f}, "
+        f"box=({x1}, {y1}, {x2}, {y2})"
+    )
+
+    return (x1, y1, x2, y2)
+
+
+# ============================================================
+# OVERLAY
+# ============================================================
+
+def create_overlay(image, clot_mask, robot_box=None):
+
     overlay = image.copy()
-    m = mask > 0
-    blended = image.astype(np.float32) * (1 - alpha) + np.array(color, np.float32) * alpha
-    overlay[m] = blended.clip(0, 255).astype(np.uint8)[m]
+
+    # Clot overlay
+    clot_layer = overlay.copy()
+
+    clot_layer[clot_mask > 0] = OVERLAY_COLOR
+
+    overlay = cv2.addWeighted(
+        clot_layer,
+        OVERLAY_ALPHA,
+        overlay,
+        1.0 - OVERLAY_ALPHA,
+        0
+    )
+
+    # No yellow clot contour.
+
+    # Robot green square
+    if robot_box is not None:
+
+        x1, y1, x2, y2 = robot_box
+
+        green_layer = overlay.copy()
+
+        cv2.rectangle(
+            green_layer,
+            (x1, y1),
+            (x2, y2),
+            ROBOT_COLOR,
+            -1
+        )
+
+        overlay = cv2.addWeighted(
+            green_layer,
+            ROBOT_OVERLAY_ALPHA,
+            overlay,
+            1.0 - ROBOT_OVERLAY_ALPHA,
+            0
+        )
+
+        cv2.rectangle(
+            overlay,
+            (x1, y1),
+            (x2, y2),
+            ROBOT_COLOR,
+            3
+        )
+
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+
+        cv2.circle(
+            overlay,
+            (cx, cy),
+            3,
+            (255, 255, 255),
+            -1
+        )
+
     return overlay
 
 
-def draw_head_box(image, box, color=HEAD_BOX_COLOR, alpha=HEAD_BOX_ALPHA, pad=HEAD_BOX_PAD):
-    # Filled, translucent box around the robot head.
-    if box is None:
-        return image
-    x, y, w, h = box
-    H, W = image.shape[:2]
-    x0, y0 = max(0, x - pad), max(0, y - pad)
-    x1, y1 = min(W, x + w + pad), min(H, y + h + pad)
+# ============================================================
+# PROCESS ONE IMAGE
+# ============================================================
 
-    out = image.copy()
-    region = image[y0:y1, x0:x1].astype(np.float32)
-    mixed = region * (1 - alpha) + np.array(color, np.float32) * alpha
-    out[y0:y1, x0:x1] = mixed.clip(0, 255).astype(np.uint8)
-    return out
+def process_image(image_path, output_dir, previous_mask=None):
 
+    image = cv2.imread(str(image_path))
 
-# ---------------- processing ----------------
-def process_frame(
-    image,
-    steps,
-    clot_mask=None,
-    save_original=True,
-):
-    if save_original:
-        steps.save("original", image)
-    height = image.shape[0]
-    y_band = (
-        int(height * TUBE_Y_TOP_RATIO),
-        int(height * TUBE_Y_BOTTOM_RATIO),
+    if image is None:
+        print(f"Could not read: {image_path}")
+        return previous_mask
+
+    frame_name = image_path.stem
+
+    steps_dir = output_dir / frame_name
+    steps_dir.mkdir(parents=True, exist_ok=True)
+
+    # Clot segmentation
+    clot_mask, core, relaxed_candidates = segment_clot(
+        image,
+        previous_mask
     )
 
-    if clot_mask is None:
-        clot_mask = segment_clot(image, steps=steps)
-    clot_overlay = make_overlay(image, make_head_exclusion_mask(clot_mask))
-    steps.save("clot_overlay", clot_overlay)
+    # Save intermediate images
+    save_debug(
+        steps_dir / "01_red_channel.png",
+        image[:, :, 2]
+    )
 
-    tracked_head_box, head_mask, head_detected = find_head(
+    save_debug(
+        steps_dir / "02_clot_core.png",
+        core
+    )
+
+    save_debug(
+        steps_dir / "05_relaxed_candidates.png",
+        relaxed_candidates
+    )
+
+    save_debug(
+        steps_dir / "06_final_clot_mask.png",
+        clot_mask
+    )
+
+    # Robot detection from original image, rightmost third only
+    robot_box = detect_robot_head(
+        image,
+        steps_dir
+    )
+
+    # Final overlay
+    overlay = create_overlay(
         image,
         clot_mask,
-        y_band,
-        steps=steps,
-    )
-    visible_head_box = tracked_head_box if head_detected else None
-    overlay = draw_head_box(clot_overlay, visible_head_box)
-    steps.save("final_overlay", overlay)
-    return clot_mask, overlay, tracked_head_box, head_mask, head_detected
-
-
-def process_image(input_file, show=True):
-    image = cv2.imread(str(input_file))
-    if image is None:
-        raise FileNotFoundError(f"Could not read image: {input_file}")
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    steps_dir = OUTPUT_DIR / "visualizations" / "steps" / input_file.stem
-    steps = StepSaver(steps_dir)
-    clot_mask, overlay, head_box, head_mask, head_detected = process_frame(
-        image, steps
+        robot_box
     )
 
-    mask_path = OUTPUT_DIR / f"{input_file.stem}_clot_mask.png"
-    overlay_path = OUTPUT_DIR / f"{input_file.stem}_final_overlay.png"
-    head_mask_path = OUTPUT_DIR / f"{input_file.stem}_robot_head_mask.png"
-    if not cv2.imwrite(str(mask_path), clot_mask):
-        raise OSError(f"Could not save clot mask: {mask_path}")
-    if not cv2.imwrite(str(overlay_path), overlay):
-        raise OSError(f"Could not save result overlay: {overlay_path}")
-    if not cv2.imwrite(str(head_mask_path), head_mask):
-        raise OSError(f"Could not save robot-head mask: {head_mask_path}")
-    print("clot area (px):", int((clot_mask > 0).sum()))
-    print("head box (x, y, w, h):", head_box if head_detected else None)
-    print("robot-head mask saved to:", head_mask_path)
-    print("steps saved in:", steps_dir)
+    save_debug(
+        output_dir / f"{frame_name}_mask.png",
+        clot_mask
+    )
 
-    if show and not os.environ.get("NOSHOW"):
-        cv2.imshow("final overlay", overlay)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+    save_debug(
+        output_dir / f"{frame_name}_overlay.png",
+        overlay
+    )
 
+    print(f"Processed: {image_path.name}")
+
+    return clot_mask
+
+
+# ============================================================
+# MAIN
+# ============================================================
 
 def main():
+
     parser = argparse.ArgumentParser(
-        description="Process every photo in a folder to segment the blood clot and locate the robot head."
+        description="Blood clot segmentation and robot head detection"
     )
+
     parser.add_argument(
-        "input_path",
-        nargs="?",
-        type=Path,
-        default=INPUT_PATH,
-        help="Folder containing photos (default: %(default)s)",
+        "--input",
+        type=str,
+        default=str(INPUT_DIR)
     )
-    input_path = parser.parse_args().input_path
 
-    if not input_path.exists():
-        raise FileNotFoundError(f"Input path does not exist: {input_path}")
-    if not input_path.is_dir():
-        raise ValueError(f"Input must be a folder of photos, not a file: {input_path}")
-
-    image_files = sorted(
-        path for path in input_path.iterdir()
-        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=str(OUTPUT_DIR)
     )
-    if not image_files:
-        raise FileNotFoundError(f"No supported photos found in: {input_path}")
-    for image_file in image_files:
-        print(f"Processing image: {image_file}")
-        process_image(image_file, show=False)
+
+    args = parser.parse_args()
+
+    input_dir = Path(args.input)
+    output_dir = Path(args.output)
+
+    if not input_dir.exists():
+        raise FileNotFoundError(
+            f"Input directory does not exist: {input_dir}"
+        )
+
+    extensions = {
+        ".png", ".jpg", ".jpeg",
+        ".bmp", ".tif", ".tiff"
+    }
+
+    image_paths = [
+        p for p in input_dir.iterdir()
+        if p.suffix.lower() in extensions
+    ]
+
+    image_paths.sort(key=natural_sort_key)
+
+    if not image_paths:
+        print(f"No images found in: {input_dir}")
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    previous_mask = None
+
+    for image_path in image_paths:
+
+        previous_mask = process_image(
+            image_path,
+            output_dir,
+            previous_mask
+        )
+
+    print("\nProcessing completed.")
+    print(f"Results saved in: {output_dir.resolve()}")
 
 
 if __name__ == "__main__":
