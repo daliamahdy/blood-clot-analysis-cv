@@ -5,6 +5,10 @@ A Python-based computer vision project for automated blood clot segmentation, ar
 
 The project uses **classical computer vision techniques with OpenCV and NumPy**, without relying on deep-learning models or segmentation frameworks.
 
+## Approach
+
+The project explores traditional image-processing methods for biological image analysis, combining colour-channel analysis, thresholding, morphological refinement, contour detection, and temporal information.
+
 ## Features
 
 ### 1. Blood Clot Segmentation
@@ -26,6 +30,17 @@ The project uses **classical computer vision techniques with OpenCV and NumPy**,
 - Contour analysis using area, circularity, and aspect ratio.
 - Visual bounding-box annotation.
 
+## Output
+
+The pipeline generates results such as:
+
+- Segmentation masks.
+- Clot overlays on original images.
+- Intermediate diagnostic images.
+- Robot-head detection visualizations.
+- Area-analysis results, where enabled.
+
+Results are saved in the configured output directory.
 ## Technologies
 
 - Python
@@ -94,20 +109,5 @@ python -m clotcv.cli --input "input/images/Set1"
 
 Adjust the input paths and command-line arguments according to your dataset and configuration.
 
-## Output
 
-The pipeline generates results such as:
 
-- Segmentation masks.
-- Clot overlays on original images.
-- Intermediate diagnostic images.
-- Robot-head detection visualizations.
-- Area-analysis results, where enabled.
-
-Results are saved in the configured output directory.
-
-## Approach
-
-The project explores traditional image-processing methods for biological image analysis, combining colour-channel analysis, thresholding, morphological refinement, contour detection, and temporal information.
-
-The objective is to develop an interpretable and lightweight computer vision pipeline for analysing blood clot regions and monitoring their
