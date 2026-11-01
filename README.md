@@ -1,6 +1,6 @@
 # Blood Clot Analysis using Computer Vision
 <p align="center">
-  <img src="demo_output.png" alt="Blood Clot Analysis Demo" width="400">
+  <img src="demo_output.png" alt="Blood Clot Analysis Demo" width="500">
 </p>
 
 A Python-based computer vision project for automated blood clot segmentation, area analysis, and robot-head detection in image and video data.
