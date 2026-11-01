@@ -1,4 +1,4 @@
-# Blood Clot Analysis using Computer Vision
+<h1 align="center">Blood Clot Analysis using Computer Vision</h1>
 <p align="center">
   <img src="demo_output.png" alt="Blood Clot Analysis Demo" width="500">
 </p>
