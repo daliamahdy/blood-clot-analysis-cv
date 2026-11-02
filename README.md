@@ -37,7 +37,7 @@ flowchart TD
     I2 --> K
 
     style A fill:#11284b,color:#ffffff,stroke:#11284b
-    style K fill:#ff6a00,color:#ffffff,stroke:#2c3482
+    style K fill:##2c3482,color:#ffffff,stroke:#2c3482
     style D1 fill:#e8eef5,color:#11284b,stroke:#11284b
     style D2 fill:#e8eef5,color:#11284b,stroke:#11284b
 ```
