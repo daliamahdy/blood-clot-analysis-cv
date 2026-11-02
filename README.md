@@ -1,4 +1,4 @@
-<h1 align="center">Blood Clot Segmentation</h1>
+<h1 align="center">Classical Image Processing for Blood Clot Segmentation</h1>
 <p align="center">
   <img src="demo_output.png" alt="Blood Clot Analysis Demo" width="500">
 </p>
