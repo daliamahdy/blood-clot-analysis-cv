@@ -14,28 +14,36 @@ The project explores traditional image-processing methods for biological image a
 ## Pipeline Overview
 
 ```mermaid
+## Pipeline Overview
+
+```mermaid
 flowchart TD
-    A[Input Images / Video] --> B[Frame Extraction]
-    B --> C[Image Preprocessing]
+    A["Input Images / Video"] --> B["Frame Extraction"]
+    B --> C["Image Preprocessing"]
 
-    C --> D1[Blood Clot Analysis]
-    C --> D2[Robot-Head Detection]
+    C --> D1["Blood Clot Analysis"]
+    C --> D2["Robot-Head Detection"]
 
-    D1 --> E1[Red Channel Extraction]
-    E1 --> F1[Thresholding]
-    F1 --> G1[Morphological Refinement]
-    G1 --> H1[Region Selection & Recovery]
-    H1 --> I1[Temporal Refinement]
-    I1 --> J1[Clot Segmentation Mask]
+    D1 --> E1["Red Channel"]
+    E1 --> F1["Thresholding"]
+    F1 --> G1["Morphological Refinement"]
+    G1 --> H1["Region Selection & Recovery"]
+    H1 --> I1["Temporal Refinement"]
+    I1 --> J1["Clot Segmentation Mask"]
 
-    D2 --> E2[Right-Side ROI Selection]
-    E2 --> F2[Grayscale & Thresholding]
-    F2 --> G2[Contour Detection]
-    G2 --> H2[Shape-Based Filtering]
-    H2 --> I2[Robot-Head Localization]
+    D2 --> E2["Right-Side ROI"]
+    E2 --> F2["Grayscale & Thresholding"]
+    F2 --> G2["Contour Detection"]
+    G2 --> H2["Shape Filtering"]
+    H2 --> I2["Robot-Head Localization"]
 
-    J1 --> K[Visualization & Results]
+    J1 --> K["Visualization & Results"]
     I2 --> K
+
+    style A fill:#11284b,color:#ffffff,stroke:#11284b
+    style K fill:#ff6a00,color:#ffffff,stroke:#ff6a00
+    style D1 fill:#e8eef5,color:#11284b,stroke:#11284b
+    style D2 fill:#e8eef5,color:#11284b,stroke:#11284b
 ```
 
 ## Features
