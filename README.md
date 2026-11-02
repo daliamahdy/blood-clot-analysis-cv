@@ -46,17 +46,11 @@ flowchart TD
 
 ### 1. Blood Clot Segmentation
 - Red-channel-based image analysis.
-- Gaussian smoothing and threshold.
 - Morphological operations to refine segmentation.
 - Connected-component analysis to identify the clot region.
-
-### 2. Clot Visualization
-- Semi-transparent overlay of the detected clot.
 - Individual binary segmentation masks.
-- Diagnostic images to inspect intermediate processing steps.
 
 ### 3. Robot-Head Detection
-- Detection of the robot head within the rightmost third of the image.
 - Grayscale conversion and threshold-based candidate extraction.
 - Contour analysis using area, circularity, and aspect ratio.
 - Visual bounding-box annotation.
@@ -72,7 +66,7 @@ The pipeline generates results such as:
 - Area-analysis results, where enabled.
 
 Results are saved in the configured output directory.
-## Technologies
+## Tools
 
 - Python
 - OpenCV
