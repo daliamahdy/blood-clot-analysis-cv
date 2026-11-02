@@ -12,10 +12,6 @@ The project uses **classical computer vision techniques with OpenCV and NumPy**,
 The project explores traditional image-processing methods for biological image analysis, combining colour-channel analysis, thresholding, morphological refinement, contour detection, and temporal information.
 
 ## Pipeline Overview
-
-```mermaid
-## Pipeline Overview
-
 ```mermaid
 flowchart TD
     A["Input Images / Video"] --> B["Frame Extraction"]
